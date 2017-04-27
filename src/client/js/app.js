@@ -10,6 +10,8 @@ import BlamDB from 'blam-db';
 const blamDB = new BlamDB();
 import BlamLocal from 'blam-local';
 const blamLocal = new BlamLocal();
+import BlamIgnore from 'blam-ignore';
+const blamIgnore = new BlamIgnore();
 import TaskMgr from 'task';
 const taskMgr = new TaskMgr();
 import Logger from 'logger';
@@ -17,7 +19,7 @@ const logger = new Logger();
 import * as Blam from 'blam';
 
 import {
-        DB_DIR, API_VERSION_FILE, GITHUB_ADDONS_DB, INSTALLED_ADDONS_DB,
+        DB_DIR, API_VERSION_FILE, GITHUB_ADDONS_DB, INSTALLED_ADDONS_DB, IGNORE_ADDON_DB,
         CONFIG_DIR, CONFIG_FILE_PATH, BL_INFO_UNDEF, CONFIG_FILE_INIT
 } from 'blam-constants';
 
@@ -57,6 +59,18 @@ function hideErrorPopup($scope) {
     $scope.errCallTrace = "";
     $scope.isOpsLocked = false;
     redrawApp($scope);
+}
+
+// show ignore-list popup
+function showIgnoreListPopup($scope) {
+    $('.ignore-list-popup').css('display', 'block');
+    $('.ignore-list-popup-background').css('display', 'block');
+}
+
+// close ignore-list popup
+function hideIgnoreListPopup($scope) {
+    $('.ignore-list-popup').css('display', 'none');
+    $('.ignore-list-popup-background').css('display', 'none');
 }
 
 function loadGitHubAddonDB() {
@@ -122,7 +136,7 @@ async function installAddon($scope, key, repo, cb) {
         // copy add-on to add-on directory
         let targetDir = target;
         if (isPackage) {
-            let keyAfter = key.replace(/\s/g, '_');
+            let keyAfter = key.replace(/[\.\s]/g, '_');
             targetDir = target + blamLocal.getPathSeparator() + keyAfter;
             fs.mkdirSync(targetDir);
         }
@@ -290,6 +304,32 @@ app.controller('MainController', function ($scope, $timeout) {
         updateInstalledAddonDB($scope);
     };
 
+    function updateIgnoreList($scope) {
+        $scope.ignoreList = blamIgnore.getList();
+        $scope.ignoreCandItemList = [];
+        let keys = Object.keys($scope.addonStatus);
+        for (let i = 0; i < keys.length; ++i) {
+            let k = keys[i];
+            if ($scope.addonStatus[k]['installed']) {
+                if (!blamIgnore.ignored(k)) {
+                    $scope.ignoreCandItemList.push(k);
+                }
+            }
+        }
+    }
+
+    // "Add to Ignore List" button
+    $scope.onAddIgnBtnClicked = function ($event) {
+        blamIgnore.addItem($scope.ignoreCandListSelect);
+        updateIgnoreList($scope);
+    };
+
+    // "Remove From Ignore List" button
+    $scope.onRmIgnBtnClicked = function ($event) {
+        blamIgnore.removeItem($scope.ignoreListSelect);
+        updateIgnoreList($scope);
+    };
+
     $scope.isAddonListActive = function (index) {
         if ($scope.addonListActive == undefined) {
             $scope.onAddonListSelectorChanged(0);
@@ -407,6 +447,9 @@ app.controller('MainController', function ($scope, $timeout) {
         $scope.githubAddons = loadGitHubAddonDB();
         $scope.installedAddons = loadInstalledAddonsDB();
         $scope.addonStatus = Blam.updateAddonStatus($scope.githubAddons, $scope.installedAddons, $scope.blVerList);
+
+        updateIgnoreList($scope);
+
         onAddonSelectorChanged();
 
         $scope.isOpsLocked = false;
@@ -416,10 +459,13 @@ app.controller('MainController', function ($scope, $timeout) {
 
     initApp();
 
+    $scope.closeIgnoreListPopup = () => {
+        hideIgnoreListPopup($scope);
+    };
 
     $scope.closeErrorPopup = () => {
         hideErrorPopup($scope);
-    }
+    };
 
     async function updateGitHubAddonDB($scope) {
         $scope.isOpsLocked = true;
@@ -448,6 +494,8 @@ app.controller('MainController', function ($scope, $timeout) {
     }
 
     $scope.changedAddonOrder = onAddonSelectorChanged;
+
+    showIgnoreListPopup($scope);
 
     function onAddonSelectorChanged() {
         // collect filter condition

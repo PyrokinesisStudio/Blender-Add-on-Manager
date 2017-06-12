@@ -131,10 +131,16 @@
                 margin: 1.0rem;
             }
             .ui {
-                @include selectbox(30rem);
-                @include text-button(15rem);
+                @include selectbox(41rem);
+                @include text-box(40rem);
                 display: flex;
                 padding-left: 2rem;
+                padding-bottom: 0.5rem;
+                .buttons {
+                    position: relative;
+                    @include text-button(7rem);
+                    left: -1rem;
+                }
             }
         }
         .close-button-wrapper {

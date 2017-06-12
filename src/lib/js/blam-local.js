@@ -12,16 +12,22 @@ const logger = new Logger();
 
 export default class BlamLocal
 {
-    constructor() {
-        this['addonList'] = {};
+    /* customDir: BlamCustomDir */
+    constructor(customDir) {
+        this['addonList'] = {
+            'default': [],
+            'custom': []
+        };
         this['osInfo'] = {};
         this['blVers'] = [];
         this['loginUser'] = "";
         this['pathSeparator'] = "/";
+
+        if (customDir) { this['blamCustomDir'] = customDir; }
     }
 
     // get OS information
-    getOSInfo() {
+    _getOSInfo() {
         this['osInfo'] = {};
         this['pathSeparator'] = "/";
         logger.category('lib').info("Check Operating System Type ...");
@@ -42,7 +48,7 @@ export default class BlamLocal
     }
 
     // check blender version in user config directory
-    checkBlVer() {
+    _checkBlVer() {
         let fn = {};
 
         this['loginUser'] = "";
@@ -103,8 +109,8 @@ export default class BlamLocal
     }
 
     // make add-on path from OS type, username, blender version
-    makeAddonPath(osType, user, blVer) {
-        var scriptPath = this.makeScriptPath(osType, user, blVer);
+    _makeAddonPath(osType, user, blVer) {
+        var scriptPath = this._makeScriptPath(osType, user, blVer);
         if (!scriptPath) {
             return null;
         }
@@ -113,7 +119,7 @@ export default class BlamLocal
     }
 
     // make script path from OS type, username, blender version
-    makeScriptPath(osType, user, blVer) {
+    _makeScriptPath(osType, user, blVer) {
         switch (osType) {
             case 'Windows_NT':
                 return "C:\\Users\\" + user + "\\AppData\\Roaming\\Blender Foundation\\Blender\\" + blVer + "\\scripts";
@@ -127,12 +133,14 @@ export default class BlamLocal
     }
 
     // get installed add-on name
-    getInstalledAddonName() {
-        this['addonList'] = {};
+    _getInstalledAddonName() {
+        let defaultAddonList = {};
+        let customAddonList = {};
 
         for (let i = 0; i < this.blVers.length; ++i) {
             let version = this.blVers[i];
-            let scriptPath = this.makeAddonPath(this['osInfo']['type'], this['loginUser'], version);
+            defaultAddonList[version] = [];
+            let scriptPath = this._makeAddonPath(this['osInfo']['type'], this['loginUser'], version);
             if (!scriptPath) { throw new Error("Failed to get script path"); }
             if (!Utils.isDirectory(scriptPath)) { continue; }
             let list = fs.readdirSync(scriptPath);
@@ -140,76 +148,112 @@ export default class BlamLocal
                 return e != "__pycache__";
             });
             if (list.length == 0) { continue; }
-            this['addonList'][version] = [];
             for (let l = 0; l < list.length; ++l) {
-                this['addonList'][version].push({'name': list[l]});
+                defaultAddonList[version].push({'name': list[l]});
             }
         }
+
+
+        // custom install directory
+        if (this['blamCustomDir']) {
+            let customDir = this['blamCustomDir'].getTarget();
+            console.log(customDir);
+            if (customDir && Utils.isDirectory(customDir)) {
+                let list = fs.readdirSync(customDir);
+                list = list.filter( (e) => {
+                    return e != "__pycache__";
+                });
+                customAddonList[customDir] = [];
+                for (let l = 0; l < list.length; ++l) {
+                    customAddonList[customDir].push({'name': list[l]});
+                }
+            }
+        }
+
+        this['addonList']['default'] = defaultAddonList;
+        this['addonList']['custom'] = customAddonList;
+    }
+
+    _buildBlInfo(addonPath, addonDir) {
+        for (let i in addonDir) {
+            let path = addonPath + this['pathSeparator'] + addonDir[i]['name'];
+            let mainSrcPath = path;
+            if (Utils.isDirectory(mainSrcPath)) {
+                let list = fs.readdirSync(mainSrcPath);
+                let found = false;
+                for (let i = 0; i < list.length; ++i) {
+                    if (list[i].indexOf("__init__.py") >= 0) {
+                        mainSrcPath += this['pathSeparator'] + "__init__.py";
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    continue;   // skip if __init__.py is not found
+                }
+            }
+            let srcBody = fs.readFileSync(mainSrcPath).toString();
+            if (!Utils.isExistFile(mainSrcPath)) { throw new Error("File '" + mainSrcPath + "' does not exist"); }
+            let blInfoBody = Blam.extractBlInfoBody(srcBody);
+            if (!blInfoBody) { continue; }      // ignore
+            let info = Blam.parseBlInfo(blInfoBody);
+            if (!info) { continue; }            // ignore
+            addonDir[i]['bl_info'] = Blam.validateBlInfo(info);
+            addonDir[i]['main_src_path'] = mainSrcPath;
+            addonDir[i]['src_path'] = path;
+
+            // cleanup
+            delete addonDir[i]['name'];
+        }
+        // cleanup
+        addonDir = addonDir.filter( (elm) => {
+            return elm['bl_info'] != undefined;
+        });
+
+        return addonDir;
     }
 
     // get bl_info
-    getBlInfo() {
-        for (let key in this['addonList']) {
-            let addonPath = this.makeAddonPath(this['osInfo']['type'], this['loginUser'], key);
-            if (!addonPath) { throw new Error("Failed to get add-on path"); }
-            for (let i in this['addonList'][key]) {
-                let path = addonPath + this['pathSeparator'] + this['addonList'][key][i]['name'];
-                let mainSrcPath = path;
-                if (Utils.isDirectory(mainSrcPath)) {
-                    let list = fs.readdirSync(mainSrcPath);
-                    let found = false;
-                    for (let i = 0; i < list.length; ++i) {
-                        if (list[i].indexOf("__init__.py") >= 0) {
-                            mainSrcPath += this['pathSeparator'] + "__init__.py";
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        continue;   // skip if __init__.py is not found
-                    }
-                }
-                let srcBody = fs.readFileSync(mainSrcPath).toString();
-                if (!Utils.isExistFile(mainSrcPath)) { throw new Error("File '" + mainSrcPath + "' does not exist"); }
-                let blInfoBody = Blam.extractBlInfoBody(srcBody);
-                if (!blInfoBody) { continue; }      // ignore
-                let info = Blam.parseBlInfo(blInfoBody);
-                if (!info) { continue; }            // ignore
-                this['addonList'][key][i]['bl_info'] = Blam.validateBlInfo(info);
-                this['addonList'][key][i]['main_src_path'] = mainSrcPath;
-                this['addonList'][key][i]['src_path'] = path;
+    _getBlInfo() {
+        let defaultDirList = this['addonList']['default'];
+        let customDirList = this['addonList']['custom'];
 
-                // cleanup
-                delete this['addonList'][key][i]['name'];
-            }
-            // cleanup
-            this['addonList'][key] = this['addonList'][key].filter( (elm) => {
-                return elm['bl_info'] != undefined;
-            });
+        for (let key in defaultDirList) {
+            let addonPath = this._makeAddonPath(this['osInfo']['type'], this['loginUser'], key);
+            if (!addonPath) { throw new Error("Failed to get add-on path"); }
+            defaultDirList[key] = this._buildBlInfo(addonPath, defaultDirList[key]);
         }
+
+        for (let key in customDirList) {
+            customDirList[key] = this._buildBlInfo(key, customDirList[key]);
+        }
+
+
+        this['addonList']['default'] = defaultDirList;
+        this['addonList']['custom'] = customDirList;
     }
 
     // get blender version which is installed on machine
     getInstalledBlVers() {
-        this.getOSInfo();
-        this.checkBlVer();
+        this._getOSInfo();
+        this._checkBlVer();
 
         return this.blVers;
     }
 
     // check installed blender add-on
     checkInstalledBlAddon() {
-        this.getOSInfo();
-        this.checkBlVer();
-        this.getInstalledAddonName();
-        this.getBlInfo();
+        this._getOSInfo();
+        this._checkBlVer();
+        this._getInstalledAddonName();
+        this._getBlInfo();
     }
 
     getAddonPath(blVer) {
-        this.getOSInfo();
-        this.checkBlVer();
+        this._getOSInfo();
+        this._checkBlVer();
 
-        let scriptPath = this.makeAddonPath(this['osInfo']['type'], this['loginUser'], blVer);
+        let scriptPath = this._makeAddonPath(this['osInfo']['type'], this['loginUser'], blVer);
         if (!scriptPath) { return null; }
         if (!Utils.isDirectory(scriptPath)) { return null; }
 
@@ -217,11 +261,11 @@ export default class BlamLocal
     }
 
     createAddonDir(blVer) {
-        this.getOSInfo();
-        this.checkBlVer();
+        this._getOSInfo();
+        this._checkBlVer();
 
-        let scriptPath = this.makeScriptPath(this['osInfo']['type'], this['loginUser'], blVer);
-        let addonPath = this.makeAddonPath(this['osInfo']['type'], this['loginUser'], blVer);
+        let scriptPath = this._makeScriptPath(this['osInfo']['type'], this['loginUser'], blVer);
+        let addonPath = this._makeAddonPath(this['osInfo']['type'], this['loginUser'], blVer);
         if (!scriptPath) { throw new Error("Failed to create " + scriptPath); }
         if (!Utils.isDirectory(scriptPath)) {
             if (Utils.isExistFile(scriptPath)) { throw new Error(scriptPath + " is already exist"); }
@@ -235,6 +279,15 @@ export default class BlamLocal
 
     getPathSeparator() {
         return this['pathSeparator'];
+    }
+
+    loadFrom(file) {
+        if (!Utils.isExistFile(file)) { return 1; }
+
+        let data =fs.readFileSync(file, 'utf8');
+        let json = JSON.parse(data);
+
+        this['addonList'] = json['addonList'] || [];
     }
 
     saveTo(file) {

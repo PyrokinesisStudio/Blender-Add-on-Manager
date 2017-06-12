@@ -8,8 +8,10 @@ import * as Utils from 'utils';
 
 import BlamDB from 'blam-db';
 const blamDB = new BlamDB();
+import BlamCustomDir from 'blam-custom-dir';
+const blamCustomDir = new BlamCustomDir();
 import BlamLocal from 'blam-local';
-const blamLocal = new BlamLocal();
+const blamLocal = new BlamLocal(blamCustomDir);
 import BlamIgnore from 'blam-ignore';
 const blamIgnore = new BlamIgnore();
 import TaskMgr from 'task';
@@ -20,7 +22,7 @@ import * as Blam from 'blam';
 
 import {
         DB_DIR, API_VERSION_FILE, GITHUB_ADDONS_DB, INSTALLED_ADDONS_DB, IGNORE_ADDONS_DB,
-        CONFIG_DIR, CONFIG_FILE_PATH, BL_INFO_UNDEF, CONFIG_FILE_INIT
+        CUSTOM_DIR_DB, CONFIG_DIR, CONFIG_FILE_PATH, BL_INFO_UNDEF, CONFIG_FILE_INIT
 } from 'blam-constants';
 
 
@@ -103,12 +105,24 @@ function loadIgnoreAddonDB() {
     blamIgnore.loadFrom(IGNORE_ADDONS_DB);
 }
 
+function loadCustomDirDB() {
+    if (!Utils.isExistFile(CUSTOM_DIR_DB)) { return; }
+    logger.category('app').info("Loading custom dirs DB file ...");
+    blamCustomDir.loadFrom(CUSTOM_DIR_DB);
+}
+
 
 
 async function installAddon($scope, key, repo, cb) {
     try {
         logger.category('app').info("Downloding add-on '" + repo['bl_info']['name'] + "' from " + repo['download_url']);
-        let target = blamLocal.getAddonPath($scope.blVerSelect);
+        let target = "";
+        if ($scope.blVerSelect === 'Custom') {
+            target = $scope.customDir;
+        }
+        else {
+            target = blamLocal.getAddonPath($scope.blVerSelect);
+        }
         if (target == null) {
             // try to make add-on dir.
             blamLocal.createAddonDir($scope.blVerSelect);
@@ -269,6 +283,7 @@ app.controller('MainController', function ($scope, $timeout) {
     main.repoList = [];
 
     $scope.blVerList = blamLocal.getInstalledBlVers();
+    $scope.blVerList.push('Custom');
     $scope.blVerSelect = $scope.blVerList[0];
     $scope.showBlVerSelect = true;
 
@@ -408,14 +423,8 @@ app.controller('MainController', function ($scope, $timeout) {
     };
 
     $scope.getAddonStatus = (key) => {
-        return $scope.addonStatus[key]['status'][$scope.blVerSelect];
+        return $scope.addonStatus[key]['status'][$scope.targetDir];
     };
-
-    $scope.targetIsCustomDir = () => {
-        return $scope.blVerSelect === 'Custom';
-    };
-
-    $scope.customAddonDir = "";
 
     $scope.onOpenCustomDirBtnClicked = () => {
         const remote = electron.remote;
@@ -425,17 +434,44 @@ app.controller('MainController', function ($scope, $timeout) {
             title: 'Select Custom Add-on Folder',
             defaultPath: '.'
         }, (folderName) => {
-            $scope.customDir = folderName;
+            $scope.newCustomDir = folderName;
             redrawApp($scope);
         });
     };
 
+    function updateCustomDirList($scope) {
+        $scope.customDirItemList = blamCustomDir.getList();
+        $scope.customDir = blamCustomDir.getTarget();
+        $scope.newCustomDir = "";
+    }
+
     $scope.onAddCustomDirBtnClicked = () => {
-        let dir = $scope.customDir;
-        if (!Utils.isDirectory(dir)) { return; }
-        console.log(dir);
-        $scope.customDirItemList.push(dir);
-        consle.log($scope.customAddonDirList);
+        let dir = $scope.newCustomDir;
+        for (let i = 0; i < dir.length; ++i) {
+            let d = dir[i];
+            if (!Utils.isDirectory(d)) { continue; }
+            blamCustomDir.addItem(d);
+        }
+        updateCustomDirList($scope);
+        blamCustomDir.saveTo(CUSTOM_DIR_DB);
+    };
+
+    $scope.onRmCustomDirBtnClicked = () => {
+        blamCustomDir.removeItem($scope.customDirListSelect);
+        updateCustomDirList($scope);
+        blamCustomDir.saveTo(CUSTOM_DIR_DB);
+        updateInstalledAddonDB($scope);
+    };
+
+    $scope.onSetCustomDirBtnClicked = () => {
+        blamCustomDir.setTarget($scope.customDirListSelect);
+        updateCustomDirList($scope);
+        blamCustomDir.saveTo(CUSTOM_DIR_DB);
+        updateInstalledAddonDB($scope);
+    };
+
+    $scope.onMngCustomDirBtnClicked = () => {
+        showCustomdirListPopup($scope);
     };
 
 
@@ -473,9 +509,11 @@ app.controller('MainController', function ($scope, $timeout) {
         $scope.githubAddons = loadGitHubAddonDB();
         $scope.installedAddons = loadInstalledAddonsDB();
         loadIgnoreAddonDB();
+        loadCustomDirDB();
         $scope.addonStatus = Blam.updateAddonStatus($scope.githubAddons, $scope.installedAddons, $scope.blVerList);
 
         updateIgnoreList($scope);
+        updateCustomDirList($scope);
 
         onAddonSelectorChanged();
 
@@ -529,20 +567,27 @@ app.controller('MainController', function ($scope, $timeout) {
 
     function onAddonSelectorChanged() {
         // collect filter condition
-        var activeList = $scope.addonLists[$scope.addonListActive]['value'];
-        var blVer = $scope.blVerSelect;
-        var activeCategory = [];
+        let activeList = $scope.addonLists[$scope.addonListActive]['value'];
+        let activeCategory = [];
+        let searchStr = $scope.searchStr;
+
         if ($scope.addonCategoryActive != undefined) {
-            var idx = $scope.addonCategoryActive.indexOf(true);
+            let idx = $scope.addonCategoryActive.indexOf(true);
             while (idx != -1) {
                 activeCategory.push($scope.addonCategories[idx]['value']);
                 idx = $scope.addonCategoryActive.indexOf(true, idx + 1);
             }
         }
-        var searchStr = $scope.searchStr;
+        
+        if ($scope.blVerSelect === 'Custom') {
+            $scope.targetDir = $scope.customDir;
+        }
+        else {
+            $scope.targetDir = $scope.blVerSelect;
+        }
 
         // update add-on info
-        var addons = [];
+        let addons = [];
         switch (activeList) {
             case 'installed':
                 logger.category('app').info("Show Installed add-on list");
@@ -551,7 +596,7 @@ app.controller('MainController', function ($scope, $timeout) {
                         $scope.addonStatus,
                         'installed',
                         ['INSTALLED', 'UPDATABLE'],
-                        blVer,
+                        $scope.targetDir,
                         activeCategory,
                         searchStr,
                         blamIgnore.getList());
@@ -572,7 +617,7 @@ app.controller('MainController', function ($scope, $timeout) {
                         $scope.addonStatus,
                         'github',
                         ['INSTALLED', 'NOT_INSTALLED', 'UPDATABLE'],
-                        blVer,
+                        $scope.targetDir,
                         activeCategory,
                         searchStr,
                         blamIgnore.getList());
@@ -592,7 +637,7 @@ app.controller('MainController', function ($scope, $timeout) {
                         $scope.addonStatus,
                         'installed',
                         ['UPDATABLE'],
-                        blVer,
+                        $scope.targetDir,
                         activeCategory,
                         searchStr,
                         blamIgnore.getList());
@@ -639,7 +684,7 @@ app.controller('MainController', function ($scope, $timeout) {
             try {
                 setTaskAndUpdate($scope, 'REMOVE');
                 let repoIndex = $($event.target).data('repo-index');
-                let repo = $scope.addonStatus[main.repoList[repoIndex]]['installed'][blVer];
+                let repo = $scope.addonStatus[main.repoList[repoIndex]]['installed'][$scope.targetDir];
                 $scope.isOpsLocked = true;
                 removeAddon($scope, repo);
                 advanceProgressAndUpdate($scope);
@@ -655,7 +700,7 @@ app.controller('MainController', function ($scope, $timeout) {
         function onUpBtnClicked($event) {
             setTaskAndUpdate($scope, 'UPDATE');
             let repoIndex = $($event.target).data('repo-index');
-            let repoInstalled = $scope.addonStatus[main.repoList[repoIndex]]['installed'][blVer];
+            let repoInstalled = $scope.addonStatus[main.repoList[repoIndex]]['installed'][$scope.targetDir];
             let repoGitHub = $scope.addonStatus[main.repoList[repoIndex]]['github'];
             let key = main.repoList[repoIndex];
             $scope.isOpsLocked = true;

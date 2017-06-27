@@ -6,12 +6,14 @@ import del from 'del';
 import electron from 'electron';
 import * as Utils from 'utils';
 
+import BlamOS from 'blam-os';
+const blamOS = new BlamOS();
 import BlamDB from 'blam-db';
 const blamDB = new BlamDB();
 import BlamCustomDir from 'blam-custom-dir';
 const blamCustomDir = new BlamCustomDir();
 import BlamLocal from 'blam-local';
-const blamLocal = new BlamLocal(blamCustomDir);
+const blamLocal = new BlamLocal(blamCustomDir, blamOS);
 import BlamIgnore from 'blam-ignore';
 const blamIgnore = new BlamIgnore();
 import TaskMgr from 'task';
@@ -36,12 +38,7 @@ function redrawApp($scope)
     }, 1);
 }
 
-// handle error
-function handleException($scope, e) {
-    logger.category('app').error(e);
-    showErrorPopup($scope, e.name, e.message, e.stack);
-    redrawApp($scope);
-}
+
 
 // show error popup
 function showErrorPopup($scope, title, msg, trace) {
@@ -87,202 +84,13 @@ function hideCustomdirListPopup($scope) {
     $('.customdir-list-popup-background').css('display', 'none');
 }
 
-function loadGitHubAddonDB() {
-    if (!Utils.isExistFile(GITHUB_ADDONS_DB)) { return {}; }
-    logger.category('app').info("Loading GitHub add-ons DB file ...");
-    return blamDB.readDBFile(GITHUB_ADDONS_DB);
-}
-
-function loadInstalledAddonsDB() {
-    if (!Utils.isExistFile(INSTALLED_ADDONS_DB)) { return {}; }
-    logger.category('app').info("Loading installed add-ons DB file ...");
-    return blamDB.readDBFile(INSTALLED_ADDONS_DB);
-}
-
-function loadIgnoreAddonDB() {
-    if (!Utils.isExistFile(IGNORE_ADDONS_DB)) { return; }
-    logger.category('app').info("Loading ignore add-ons DB file ...");
-    blamIgnore.loadFrom(IGNORE_ADDONS_DB);
-}
-
-function loadCustomDirDB() {
-    if (!Utils.isExistFile(CUSTOM_DIR_DB)) { return; }
-    logger.category('app').info("Loading custom dirs DB file ...");
-    blamCustomDir.loadFrom(CUSTOM_DIR_DB);
-}
-
-
-
-async function installAddon($scope, key, repo, cb) {
-    try {
-        logger.category('app').info("Downloding add-on '" + repo['bl_info']['name'] + "' from " + repo['download_url']);
-        let target = "";
-        if ($scope.blVerSelect === 'Custom') {
-            target = $scope.customDir;
-        }
-        else {
-            target = blamLocal.getAddonPath($scope.blVerSelect);
-        }
-        if (target == null) {
-            // try to make add-on dir.
-            blamLocal.createAddonDir($scope.blVerSelect);
-            target = blamLocal.getAddonPath($scope.blVerSelect);
-            if (target == null) { throw new Error("Failed to make add-on directory"); }
-        }
-
-        // download and extract add-on
-        let downloadTo = target + blamLocal.getPathSeparator() + repo['bl_info']['name'] + ".zip";
-        logger.category('app').info("Save to " + downloadTo + " ...");
-        const download = await Utils.downloadFile(config, repo['download_url'], downloadTo);
-        const extract = await Utils.extractZipFile(downloadTo, target, true);
-
-        let extractedPath = target + blamLocal.getPathSeparator() + repo['repo_name'] + '-master';
-        let srcPath = extractedPath + repo['src_dir'] + '/' + repo['src_main'];
-        let sp = srcPath.split(/[\/\\]/);
-        let copingFiles = [];
-        let isPackage = false;
-        // Package
-        if (sp[sp.length - 1] == "__init__.py") {
-            isPackage = true;
-        }
-        // Module
-        else {
-            isPackage = false;
-        }
-        advanceProgressAndUpdate($scope);
-        advanceProgressAndUpdate($scope);
-        let basePath = "";
-        for (let i = 0; i < sp.length - 1; ++i) {
-            basePath += sp[i] + blamLocal.getPathSeparator();
-        }
-        if (isPackage) {
-            let list = fs.readdirSync(basePath);
-            for (let i = 0; i < list.length; ++i) {
-                copingFiles.push({ 'path': basePath + list[i], 'filename': list[i]} );
-            }
-        }
-        else {
-            let modPath = basePath + blamLocal.getPathSeparator() + sp[sp.length - 1];
-            copingFiles.push({'path': modPath, 'filename': sp[sp.length - 1]});
-        }
-        // copy add-on to add-on directory
-        let targetDir = target;
-        if (isPackage) {
-            let keyAfter = key.replace(/[\.\s]/g, '_');
-            targetDir = target + blamLocal.getPathSeparator() + keyAfter;
-            fs.mkdirSync(targetDir);
-        }
-        for (let i = 0; i < copingFiles.length; ++i) {
-            let source = copingFiles[i]['path'];
-            let target = targetDir + blamLocal.getPathSeparator() + copingFiles[i]['filename'];
-            fsext.copySync(source, target);
-        }
-        advanceProgressAndUpdate($scope);
-        // delete garbage data
-        del.sync([extractedPath], {force: true});
-
-        cb();
-    }
-    catch (e) {
-        handleException($scope, e);
-    }
-}
-
-function removeAddon($scope, repo) {
-    try {
-        var deleteFrom = repo['src_path'];
-        if (!deleteFrom) { throw new Error(deleteFrom + "is not found"); }
-        logger.category('app').info("Deleting '" + deleteFrom + "' ...");
-        advanceProgressAndUpdate($scope);
-        var result = del.sync([deleteFrom], {force: true});
-        logger.category('app').info("Deleted '" + deleteFrom + "'");
-    }
-    catch (e) {
-        handleException($scope, e);
-    }
-}
-
-function setTaskAndUpdate($scope, taskName)
-{
-    taskMgr.setTask(taskName);
-    updateTask($scope);
-}
-
-function advanceProgressAndUpdate($scope)
-{
-    taskMgr.advanceProgress();
-    updateTask($scope);
-}
-
-function updateTask($scope)
-{
-    setTimeout(function () {
-        $scope.task = {
-            'progress': taskMgr.genProgressString(),
-            'progressRate': taskMgr.getCurTaskProgressRate()
-        };
-        $scope.$apply();
-    }, 1);
-}
-
-function completeTask($scope, addon)
-{
-    advanceProgressAndUpdate($scope);
-    setTimeout(function () {
-        $scope.task = {
-            'progress': taskMgr.genProgressString() + " '" + addon + "'",
-            'progressRate': 1.0
-        };
-        $scope.$apply();
-    }, 1);
-}
-
-// make task
-taskMgr.makeTasks(['INSTALL', 'REMOVE', 'UPDATE']);
-taskMgr.addItems(
-    'INSTALL',
-    [
-        'Downloading Add-on ...',
-        'Extracting Add-on ...',
-        'Installing Add-on ...',
-        'Cleaning up ...',
-        'Updating Installed Add-on Database ...',
-        'Updating Internal Information ...'
-    ]
-);
-taskMgr.setCompletionString('INSTALL', 'Installed Add-on');
-
-taskMgr.addItems(
-    'REMOVE',
-    [
-        'Removing Add-on ...',
-        'Updating Installed Add-on Database ...',
-        'Updating Internal Information ...'
-    ]
-)
-taskMgr.setCompletionString('REMOVE', 'Deleted Add-on');
-
-taskMgr.addItems(
-    'UPDATE',
-    [
-        'Removing Add-on ...',
-        'Downloading Add-on ...',
-        'Extracting Add-on ...',
-        'Installing Add-on ...',
-        'Cleaning up ...',
-        'Updating Installed Add-on Database ...',
-        'Updating Internal Information ...'
-    ]
-)
-taskMgr.setCompletionString('UPDATE', 'Updated Add-on');
-
 
 app.controller('MainController', function ($scope, $timeout) {
 
     var main = this;
     main.repoList = [];
 
-    $scope.blVerList = blamLocal.getInstalledBlVers();
+    $scope.blVerList = blamOS.getBlenderVersions();
     $scope.blVerList.push('Custom');
     $scope.blVerSelect = $scope.blVerList[0];
     $scope.showBlVerSelect = true;
@@ -335,6 +143,7 @@ app.controller('MainController', function ($scope, $timeout) {
     // "Update Install DB" button
     $scope.onInstDBBtnClicked = function ($event) {
         updateInstalledAddonDB($scope);
+        onAddonSelectorChanged();
     };
 
     // "Manage Ignore DB button"
@@ -473,96 +282,6 @@ app.controller('MainController', function ($scope, $timeout) {
     $scope.onMngCustomDirBtnClicked = () => {
         showCustomdirListPopup($scope);
     };
-
-
-    async function initApp() {
-        $scope.isOpsLocked = true;
-        redrawApp($scope);
-
-        // setup users directory
-        if (!Utils.isExistFile(DB_DIR)) { fs.mkdirSync(DB_DIR); }
-        if (!Utils.isExistFile(CONFIG_DIR)) { fs.mkdirSync(CONFIG_DIR); }
-
-        // make config.json
-        if (!Utils.isExistFile(CONFIG_FILE_PATH)) {
-            fs.writeFileSync(CONFIG_FILE_PATH, CONFIG_FILE_INIT);
-        }
-
-        // read configuration file
-        let text = fs.readFileSync(CONFIG_FILE_PATH, 'utf8');
-        config = JSON.parse(text);
-        // initialize
-        blamDB.init(config);
-
-        // make installed add-on DB
-        if (!Utils.isExistFile(INSTALLED_ADDONS_DB)) {
-            blamLocal.checkInstalledBlAddon();
-            blamLocal.saveTo(INSTALLED_ADDONS_DB);
-        }
-
-        // make github add-on DB
-        if (!Utils.isExistFile(GITHUB_ADDONS_DB)) {
-            const version = await blamDB.makeAPIStatusFile(API_VERSION_FILE);
-            const fetch = await blamDB.fetchFromDBServer(GITHUB_ADDONS_DB);
-        }
-
-        $scope.githubAddons = loadGitHubAddonDB();
-        $scope.installedAddons = loadInstalledAddonsDB();
-        loadIgnoreAddonDB();
-        loadCustomDirDB();
-        $scope.addonStatus = Blam.updateAddonStatus($scope.githubAddons, $scope.installedAddons, $scope.blVerList);
-
-        updateIgnoreList($scope);
-        updateCustomDirList($scope);
-
-        onAddonSelectorChanged();
-
-        $scope.isOpsLocked = false;
-        redrawApp($scope);
-    }
-
-
-    initApp();
-
-    $scope.closeIgnoreListPopup = () => {
-        hideIgnoreListPopup($scope);
-    };
-
-    $scope.closeErrorPopup = () => {
-        hideErrorPopup($scope);
-    };
-
-    $scope.closeCustomDirListPopup = () => {
-        hideCustomdirListPopup($scope);
-    };
-
-    async function updateGitHubAddonDB($scope) {
-        $scope.isOpsLocked = true;
-        redrawApp($scope);
-        if (!Utils.isExistFile(DB_DIR)) {
-            fs.mkdirSync(DB_DIR);
-        }
-        const version = await blamDB.makeAPIStatusFile(API_VERSION_FILE);
-        const fetch = await blamDB.fetchFromDBServer(GITHUB_ADDONS_DB);
-        $scope.githubAddons = loadGitHubAddonDB();
-        $scope.addonStatus = Blam.updateAddonStatus($scope.githubAddons, $scope.installedAddons, $scope.blVerList);
-        onAddonSelectorChanged();
-        $scope.isOpsLocked = false;
-        redrawApp($scope);
-    }
-
-    function updateInstalledAddonDB($scope) {
-        blamLocal.checkInstalledBlAddon();
-        if (!Utils.isExistFile(DB_DIR)) {
-            fs.mkdirSync(DB_DIR);
-        }
-        blamLocal.saveTo(INSTALLED_ADDONS_DB);
-        $scope.installedAddons = loadInstalledAddonsDB();
-        $scope.addonStatus = Blam.updateAddonStatus($scope.githubAddons, $scope.installedAddons, $scope.blVerList);
-        onAddonSelectorChanged();
-    }
-
-    $scope.changedAddonOrder = onAddonSelectorChanged;
 
 
     function onAddonSelectorChanged() {
@@ -734,4 +453,109 @@ app.controller('MainController', function ($scope, $timeout) {
         $scope.onUpBtnClicked = onUpBtnClicked;
 
     }
+
+
+    async function initApp() {
+        $scope.isOpsLocked = true;
+        redrawApp($scope);
+
+        // setup users directory
+        if (!Utils.isExistFile(DB_DIR)) { fs.mkdirSync(DB_DIR); }
+        if (!Utils.isExistFile(CONFIG_DIR)) { fs.mkdirSync(CONFIG_DIR); }
+
+        // make config.json
+        if (!Utils.isExistFile(CONFIG_FILE_PATH)) {
+            fs.writeFileSync(CONFIG_FILE_PATH, CONFIG_FILE_INIT);
+        }
+
+        // read configuration file
+        let text = fs.readFileSync(CONFIG_FILE_PATH, 'utf8');
+        config = JSON.parse(text);
+        // configure
+        blamDB.configure(config);
+
+        // make installed add-on DB
+        if (!Utils.isExistFile(INSTALLED_ADDONS_DB)) {
+            blamLocal.update();
+            blamLocal.saveTo(INSTALLED_ADDONS_DB);
+        }
+
+        // make github add-on DB
+        if (!Utils.isExistFile(GITHUB_ADDONS_DB)) {
+            let proxyURL = Utils.getProxyURL(config);
+            let apiURLs = Utils.getAPIURL(config);
+
+            if (!apiURLs) { throw new Error("Invalid API URL"); }
+
+            const version = await blamDB.makeAPIStatusFile(API_VERSION_FILE);
+            const fetch = await blamDB.fetchFromServer(apiURLs, proxyURL);
+
+            blamDB.saveTo(GITHUB_ADDONS_DB);
+        }
+
+        loadGitHubAddonDB();
+        loadInstalledAddonsDB();
+        loadIgnoreAddonDB();
+        loadCustomDirDB();
+        $scope.addonStatus = Blam.updateAddonStatus(blamDB.getAddonList(),
+                                                    blamLocal.getAddonList(),
+                                                    $scope.blVerList);
+
+        updateIgnoreList($scope);
+        updateCustomDirList($scope);
+
+        onAddonSelectorChanged();
+
+        $scope.isOpsLocked = false;
+        redrawApp($scope);
+    }
+
+
+    initApp();
+
+    $scope.closeIgnoreListPopup = () => {
+        hideIgnoreListPopup($scope);
+    };
+
+    $scope.closeErrorPopup = () => {
+        hideErrorPopup($scope);
+    };
+
+    $scope.closeCustomDirListPopup = () => {
+        hideCustomdirListPopup($scope);
+    };
+
+    async function updateGitHubAddonDB($scope) {
+        let proxyURL = Utils.getProxyURL(config);
+        let apiURLs = Utils.getAPIURL(config);
+
+        if (!apiURLs) { throw new Error("Invalid API URL"); }
+
+        $scope.isOpsLocked = true;
+        redrawApp($scope);
+
+        // create DB files directory
+        if (!Utils.isExistFile(DB_DIR)) {
+            fs.mkdirSync(DB_DIR);
+        }
+
+        // update DB files
+        const version = await blamDB.makeAPIStatusFile(API_VERSION_FILE);
+        const fetch = await blamDB.fetchFromServer(apiURLs, proxyURL);
+
+        blamDB.saveTo(GITHUB_ADDONS_DB);
+
+        // update app's internal DB data
+        $scope.addonStatus = Blam.updateAddonStatus(blamDB.getAddonList(),
+                                                    blamLocal.getAddonList(),
+                                                    $scope.blVerList);
+        onAddonSelectorChanged();
+
+        // unlock app
+        $scope.isOpsLocked = false;
+        redrawApp($scope);
+    }
+
+    $scope.changedAddonOrder = onAddonSelectorChanged;
+
 });

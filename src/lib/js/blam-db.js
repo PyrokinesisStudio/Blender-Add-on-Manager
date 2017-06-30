@@ -160,7 +160,7 @@ export default class BlamDB
         return Blam.validateBlInfo(info);
     }
 
-    async buildAddonDB(cb) {
+    async buildFromGitHub() {
         var self_ = this;
         let fetched = await client.fetch('https://github.com/login');
         let login = await self_._loginGitHub(fetched);
@@ -192,8 +192,6 @@ export default class BlamDB
         }
 
         this['addonList'] = repoInfos;
-
-        cb();
     }
 
     saveTo(file) {
